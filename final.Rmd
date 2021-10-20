@@ -1,0 +1,348 @@
+---
+title: "Appendix"
+output:
+  pdf_document: default
+---
+
+```{r}
+
+
+# Processing the Data -----------------------------------------------------
+
+## load data
+raw_data = read.csv("data.csv", header = T)
+
+## change the column names
+names(raw_data) <- c('date', 'day', 'aud', 'avgtem', 'lowtem', 'hitem', 'rain', 
+                     'avgWS', 'maxWS', 'avgHum', 'sumSun','sumSR', 'maxSun', 
+                     'tem15', 'maxSn', 'avgCl', 'dust')
+data = raw_data
+head(data)
+
+## in thausands
+data['aud'] = data['aud']/1000
+
+## check NA values
+## rain 226, maxSn 359, dust 27, sumSun 1, sumSR 2, maxSun 1, tem15 1
+apply(is.na(data), 2, sum) 
+
+## delete the data indexed 240, 241, 284 which has NA value
+data[c(240, 241, 284),]
+data = data[-c(240, 241, 284),]
+rownames(data) <- NULL  # initialize index
+
+#### drop variables with many NA values
+## maxSn, dust: drop
+## rain: replace
+
+#install.packages("PerformanceAnalytics")
+library("PerformanceAnalytics")
+attach(data)
+
+## correlation between rain & average humidity (r = .55, p < .001)
+cor.test(data[!is.na(rain), "rain"], data[!is.na(rain), "avgHum"])
+chart.Correlation(data[!is.na(rain), c("rain", 'avgHum')], histogram = FALSE)
+
+## drop variables with many NA values
+library(dplyr)
+data = data %>% select(-c(rain, maxSn, dust)) 
+
+## correlation between all independent variables
+chart.Correlation(data[,4:14], histogram=FALSE)
+
+## through simple linear regression, choose one variable
+summary(lm(sqrt(aud)~avgtem, data=data)) #0.308
+summary(lm(sqrt(aud)~lowtem, data=data)) #0.198
+summary(lm(sqrt(aud)~hitem, data=data)) #0.487
+
+summary(lm(sqrt(aud)~avgWS, data=data)) #0.0319*
+summary(lm(sqrt(aud)~maxWS, data=data)) #0.00495**
+
+summary(lm(sqrt(aud)~sumSun, data=data)) #0.18
+summary(lm(sqrt(aud)~sumSR, data=data)) #0.22
+summary(lm(sqrt(aud)~maxSun, data=data)) #0.104
+
+
+# Model 1 (full model) ----------------------------------------------------
+
+m1 = lm(aud ~ lowtem + maxWS +  avgHum +
+                maxSun + tem15 + avgCl, data=data)
+summary(m1)
+
+## checking assumptions
+par(mfrow = c(2, 2))
+plot(m1) # homogeneous variance asssumption is violated.
+
+
+# Model 2 (sqrt) ----------------------------------------------------------
+
+m2 = lm(sqrt(aud) ~ lowtem + maxWS + avgHum +
+                maxSun + tem15 + avgCl, data=data)
+summary(m2)
+
+X = model.matrix(m2)
+n = nrow(X)
+p = ncol(X)
+
+## checking assumptions
+par(mfrow = c(2, 2))
+plot(m2) 
+
+## (y_hat, r)
+par(mfrow = c(1, 1))
+res2 = rstandard(m2)
+plot(m2$fitted.values, res2, 
+     xlab = 'Fitted values', ylab='Residuals') 
+
+## (x, r) well scattered
+par(mfrow = c(2, 3))
+plot(hitem, res2, xlab="Max temperature", ylab="Residuals")
+plot(maxWS, res2, xlab="Max wind speed", ylab="Residuals")
+plot(maxSun, res2, xlab="Max solar radiation quantity in a hour", ylab="Residuals")
+plot(avgHum, res2, xlab="Avearage relative Humidity", ylab="Residuals")
+plot(tem15, res2, xlab="1.5m soil temperature", ylab="Residuals")
+plot(avgCl, res2, xlab="Average amount of clouds", ylab="Residuals")
+
+
+## checking outlier
+par(mfrow = c(1, 1))
+
+# 1.leverage point
+pii = influence(m2)$hat
+lev.idx = pii > 2*p/n
+
+color = rep("black", len=n)
+color[lev.idx] = 'red'
+
+plot(pii, res2, type='n')
+points(pii, res2, pch=21, cex=0.8, bg=color)
+
+# 2.cooks distance
+Ci = cooks.distance(m2)
+plot(pii, Ci, type='n')
+points(pii, Ci, pch=21, cex=0.8, bg=color)
+sum(Ci > qf(0.5,p,n-p)) # none
+
+# 3.dfits
+dfits = dffits(m2)
+inf.idx = abs(dfits) >= 2*sqrt(p/(n-p))
+color[inf.idx] = 'blue'
+
+
+# index 248: influential point far from others
+plot(pii, dfits, type='n', 
+     xlab = 'Leverage', ylab = 'DFITS')
+points(pii, dfits, pch=21, cex=0.8, bg=color)
+text(dfits[which.max(pii)]~pii[which.max(pii)], 
+     labels=names(lev.idx[which.max(pii)]),
+     cex=0.9, font=2, pos=1) 
+
+
+# Model 3 (eliminate the influential point) -------------------------------
+
+data.rem = data[-248,] # eliminate the influential point
+rownames(data.rem) <- NULL
+
+m3 = lm(sqrt(aud) ~ lowtem + maxWS + maxSun + 
+          avgHum + tem15 + avgCl, data=data.rem)
+summary(m3)
+
+
+## checking assumptions
+par(mfrow = c(2, 2))
+plot(m3) # Ok
+
+
+## checking outlier
+par(mfrow = c(1, 1))
+
+# 1.leverage point
+pii = influence(m3)$hat
+lev.idx = pii > 2*p/n
+color = rep("black", len=n)
+color[lev.idx] = 'red'
+
+# 2.cooks distance
+Ci = cooks.distance(m3)
+sum(Ci > qf(0.5,p,n-p)) # none
+
+# 3.dfits
+dfits = dffits(m3)
+inf.idx = abs(dfits) >= 2*sqrt(p/(n-p))
+color[inf.idx] = 'blue'
+
+# there is no influential point which is highly different from others
+plot(pii, dfits, type='n', 
+     xlab = 'Leverage', ylab = 'DFITS')
+points(pii, dfits, pch=21, cex=0.8, bg=color)
+
+## checking autocorrelation 
+# Durbin-Watson test
+library(lmtest)
+dwtest(m3, alternative = 'greater')
+
+# runs test
+library(randtests)
+runs.test(m3$residuals, alternative="left.sided", plot = FALSE)
+
+
+# Model 4 (AR(1)) ---------------------------------------------------------
+
+## sample autocorrelation coefficient
+acf(m3$residuals, plot=TRUE)
+acf(m3$residuals, plot=FALSE)
+rho <- acf(m3$residuals, plot=FALSE)[1]$acf[1]
+n <- nrow(data.rem)
+
+# Fit a linear model with transformed variables
+taud <- sqrt(data.rem$aud[2:n]) - rho*sqrt(data.rem$aud[1:(n-1)])
+thitem <- data.rem$hitem[2:n] - rho*data.rem$hitem[1:(n-1)]
+tmaxWS <- data.rem$maxWS[2:n] - rho*data.rem$maxWS[1:(n-1)]
+tmaxSun <- data.rem$maxSun[2:n] - rho*data.rem$maxSun[1:(n-1)]
+tavgHum <- data.rem$avgHum[2:n] - rho*data.rem$avgHum[1:(n-1)]
+ttem15 <- data.rem$tem15[2:n] - rho*data.rem$tem15[1:(n-1)]
+tavgCl <- data.rem$avgCl[2:n] - rho*data.rem$avgCl[1:(n-1)]
+m4 <- lm(taud ~ thitem + tmaxWS + tmaxSun +
+           tavgHum + ttem15 + tavgCl)
+summary(m4)
+
+acf(m4$residuals, plot=FALSE)
+
+dwtest(m4, alternative = 'greater')
+runs.test(m4$residuals, alternative="left.sided", plot = FALSE)
+
+
+# Model 5 (add the variable) ----------------------------------------------
+
+m5 = lm(sqrt(aud) ~ lowtem + maxWS + maxSun + 
+          avgHum + tem15 + avgCl + as.factor(day), data=data.rem)
+
+summary(m5)
+
+X = model.matrix(m5)
+n = nrow(X)
+p = ncol(X)
+
+## checking assumptions
+par(mfrow = c(2, 2))
+plot(m5) # Ok
+
+## checking outlier
+par(mfrow = c(1, 1))
+
+# 1.leverage point
+pii = influence(m5)$hat
+lev.idx = pii > 2*p/n
+color = rep("black", len=n)
+color[lev.idx] = 'red'
+
+# 2.cooks distance
+Ci = cooks.distance(m5)
+sum(Ci > qf(0.5,p,n-p)) # none
+
+# 3.dfits
+dfits = dffits(m5)
+inf.idx = abs(dfits) >= 2*sqrt(p/(n-p))
+color[inf.idx] = 'blue'
+
+# there is no influential point which is highly different from others
+plot(pii, dfits, type='n', 
+     xlab = 'Leverage', ylab = 'DFITS')
+points(pii, dfits, pch=21, cex=0.8, bg=color) 
+
+## model selection
+library(olsrr)
+
+# forward selection
+mfwd_aic <- ols_step_forward_aic(m5, details=FALSE)
+mfwd_aic$model
+
+# backward elimination
+mbwd_aic <- ols_step_backward_aic(m5, details=FALSE)
+mbwd_aic$predictors
+
+# stepwise selection
+mboth_aic <- ols_step_both_aic(m5, details=FALSE)
+mboth_aic$predictors
+
+# the same results from 3 methods
+# drop avgHum,tem15, avgCl
+
+final = mfwd_aic$model
+summary(final)
+
+
+## ANOVA test
+final2 = lm(sqrt(aud) ~ maxWS + maxSun + as.factor(day), data=data.rem)
+
+anova(final2, final) # NOT reject
+summary(final2)
+
+final3 = lm(sqrt(aud) ~ maxWS + as.factor(day), data=data.rem)
+anova(final3,final2) # reject
+
+
+# Final model -------------------------------------------------------------
+
+summary(final2)
+
+# 95% CI
+confint(final2) 
+
+X = model.matrix(final2)
+n = nrow(X)
+p = ncol(X)
+
+## checking assumptions
+par(mfrow = c(2, 2))
+plot(final2)
+
+## (y_hat, r)
+par(mfrow = c(1, 1))
+res = rstandard(final2)
+plot(final2$fitted.values, res, 
+     xlab = 'Fitted values', ylab='Residuals') 
+
+## (x, r)
+par(mfrow = c(2, 3))
+plot(data.rem$hitem, res, xlab="Max temperature", ylab="Residuals")
+plot(data.rem$maxWS, res, xlab="Max wind speed", ylab="Residuals")
+plot(data.rem$maxSun, res, xlab="Max solar radiation quantity in a hour", ylab="Residuals")
+plot(data.rem$avgHum, res, xlab="Avearage relative Humidity", ylab="Residuals")
+plot(data.rem$tem15, res, xlab="1.5m soil temperature", ylab="Residuals")
+plot(data.rem$avgCl, res, xlab="Average amount of clouds", ylab="Residuals")
+
+## checking outlier
+par(mfrow = c(1, 1))
+
+# 1.leverage point
+pii = influence(final2)$hat
+lev.idx = pii > 2*p/n
+color = rep("black", len=n)
+color[lev.idx] = 'red'
+
+# 2.cooks distance
+Ci = cooks.distance(final2)
+sum(Ci > qf(0.5,p,n-p)) # none
+
+# 3.dfits
+dfits = dffits(final2)
+inf.idx = abs(dfits) >= 2*sqrt(p/(n-p))
+color[inf.idx] = 'blue'
+
+plot(pii, dfits, type='n', 
+     xlab = 'Leverage', ylab = 'DFITS')
+points(pii, dfits, pch=21, cex=0.8, bg=color) # there is no influential point which is highly different from others
+
+## multicollinearity
+library(car)
+vif(final2)
+
+## autocorrelation
+dwtest(final2, alternative = 'greater')
+runs.test(final2$residuals, alternative="left.sided", plot = FALSE)
+
+acf(final2$residuals, plot=TRUE)
+acf(final2$residuals, plot=FALSE)
+
+```
